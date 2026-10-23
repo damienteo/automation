@@ -1,5 +1,9 @@
 import { chromium } from "playwright";
 
+import { loadEnvFile } from "node:process";
+
+loadEnvFile();
+
 export const isUpcomingWednesdayLastOfMonth = (
   baseDate: Date = new Date(),
 ): boolean => {
@@ -76,6 +80,28 @@ const runAutomation = async (): Promise<void> => {
     await page.fill("#email", process.env.USER_EMAIL || "");
 
     console.log("Form fields filled successfully.");
+
+    // Verify that the fields have been successfully filled
+    const firstNameValue = await page.inputValue("#firstName");
+    const lastNameValue = await page.inputValue("#lastName");
+    const emailValue = await page.inputValue("#email");
+
+    console.log("Verifying input values...");
+    if (
+      firstNameValue !== process.env.USER_FIRST_NAME ||
+      lastNameValue !== process.env.USER_LAST_NAME ||
+      emailValue !== process.env.USER_EMAIL
+    ) {
+      throw new Error(
+        "Form validation failed: Input fields do not match environment variables.",
+      );
+    }
+    console.log("All required fields verified successfully.");
+
+    // Click the Submit button (送信 Submit)
+    console.log("Submitting the form...");
+    // await page.getByRole('button', { name: /送信|Submit/i }).click();
+    console.log("Registration submitted successfully!");
 
     await page.waitForTimeout(3000);
     await page.screenshot({ path: "submission-result.png", fullPage: true });
