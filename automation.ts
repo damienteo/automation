@@ -1,12 +1,34 @@
 import { chromium } from "playwright";
 
-async function runAutomation() {
+export const isUpcomingWednesdayLastOfMonth = (
+  baseDate: Date = new Date(),
+): boolean => {
+  const today = new Date(baseDate);
+  const upcomingWednesday = new Date(today);
+  upcomingWednesday.setDate(today.getDate() + 4);
+
+  const currentMonth = upcomingWednesday.getMonth();
+  const nextWeekWednesday = new Date(upcomingWednesday);
+  nextWeekWednesday.setDate(upcomingWednesday.getDate() + 7);
+
+  return nextWeekWednesday.getMonth() !== currentMonth;
+};
+
+const runAutomation = async (): Promise<void> => {
+  if (isUpcomingWednesdayLastOfMonth()) {
+    console.log(
+      "Skipping registration: The upcoming Wednesday is the last Wednesday of the month (in-person event day).",
+    );
+    process.exit(0);
+  }
+
+  console.log("Proceeding with registration for the online Zoom event...");
+
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
 
   try {
-    console.log("Navigating to form...");
     await page.goto(
       "https://nihongocafeota.wixsite.com/home/application-form",
       {
@@ -14,21 +36,12 @@ async function runAutomation() {
       },
     );
 
-    // NOTE: Replace these placeholder selectors and values with actual field identifiers
-    // Example: targeting inputs by label, placeholder, or type
-    console.log("Filling out form...");
-
-    // Example field entries (adjust based on actual input elements on the Wix site):
-    // await page.fill('input[name="name"]', process.env.USER_NAME || 'Your Name');
-    // await page.fill('input[type="email"]', process.env.USER_EMAIL || 'your@email.com');
-
-    // Example submit button click:
+    // Replace with your actual form field selectors:
+    // await page.fill('input[name="name"]', process.env.USER_NAME || '');
+    // await page.fill('input[type="email"]', process.env.USER_EMAIL || '');
     // await page.click('button[type="submit"]');
 
-    // Wait for submission confirmation or response
     await page.waitForTimeout(3000);
-
-    // Save a screenshot for verification
     await page.screenshot({ path: "submission-result.png", fullPage: true });
     console.log("Automation executed successfully.");
   } catch (error) {
@@ -37,6 +50,6 @@ async function runAutomation() {
   } finally {
     await browser.close();
   }
-}
+};
 
 runAutomation();
