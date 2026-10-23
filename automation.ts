@@ -45,9 +45,9 @@ const runAutomation = async (): Promise<void> => {
     // Find the first event card containing 'ZOOM 日本語カフェ' and click its registration button
     const zoomEventCard = page
       .locator('li[data-hook="events-card"]')
-      .filter({ hasText: "日本語カフェ" })
+      .filter({ hasText: "ZOOM 日本語カフェ" })
       .first();
-    // ZOOM
+
     await zoomEventCard.getByRole("link", { name: "参加申込" }).click();
 
     console.log("Clicked registration for the Zoom event.");
@@ -100,7 +100,12 @@ const runAutomation = async (): Promise<void> => {
 
     // Click the Submit button (送信 Submit)
     console.log("Submitting the form...");
-    // await page.getByRole('button', { name: /送信|Submit/i }).click();
+
+    console.log("Verifying the submit button is present...");
+    const submitButton = page.getByRole("button", { name: /送信|Submit/i });
+    await submitButton.waitFor({ state: "visible" });
+    console.log("Submit button successfully found.");
+    await page.getByRole("button", { name: /送信|Submit/i }).click();
     console.log("Registration submitted successfully!");
 
     await page.waitForTimeout(3000);
