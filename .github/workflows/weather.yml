@@ -11,44 +11,82 @@ jobs:
       - name: Fetch Weather Data
         id: fetch_weather
         run: |
-          # Fetch current weather data for Nakai, Tokyo (Lat: 35.7146, Lon: 139.6867)
-          RESPONSE=$(curl -s "https://api.open-meteo.com/v1/forecast?latitude=35.7146&longitude=139.6867&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code")
+          # Fetch current, hourly, and daily forecast data for Nakai, Tokyo (Lat: 35.7146, Lon: 139.6867)
+          # timezone=Asia%2FTokyo ensures all timestamps align with JST
+          RESPONSE=$(curl -s "https://api.open-meteo.com/v1/forecast?latitude=35.7146&longitude=139.6867&timezone=Asia%2FTokyo&current=temperature_2m,apparent_temperature,weather_code&hourly=temperature_2m,weather_code,precipitation_probability&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max")
 
-          # Parse JSON output using jq
-          TEMP=$(echo "$RESPONSE" | jq '.current.temperature_2m')
-          FEELS_LIKE=$(echo "$RESPONSE" | jq '.current.apparent_temperature')
-          HUMIDITY=$(echo "$RESPONSE" | jq '.current.relative_humidity_2m')
-          WMO_CODE=$(echo "$RESPONSE" | jq '.current.weather_code')
+          # Helper function to map WMO weather codes to text
+          get_condition() {
+            case $1 in
+              0) echo "Clear sky ☀️" ;;
+              1|2|3) echo "Mainly clear / Partly cloudy ⛅" ;;
+              45|48) echo "Foggy 🌫️" ;;
+              51|53|55) echo "Drizzle 🌧️" ;;
+              61|63|65) echo "Rain 🌧️" ;;
+              71|73|75) echo "Snow ❄️" ;;
+              80|81|82) echo "Rain showers 🌦️" ;;
+              95|96|99) echo "Thunderstorm 🌩️" ;;
+              *) echo "Code $1" ;;
+            esac
+          }
 
-          # Map basic WMO weather codes to readable descriptions
-          case $WMO_CODE in
-            0) CONDITION="Clear sky ☀️" ;;
-            1|2|3) CONDITION="Mainly clear / Partly cloudy ⛅" ;;
-            45|48) CONDITION="Foggy 🌫️" ;;
-            51|53|55) CONDITION="Drizzle 🌧️" ;;
-            61|63|65) CONDITION="Rain 🌧️" ;;
-            71|73|75) CONDITION="Snow ❄️" ;;
-            80|81|82) CONDITION="Rain showers 🌦️" ;;
-            95|96|99) CONDITION="Thunderstorm 🌩️" ;;
-            *) CONDITION="Code $WMO_CODE" ;;
-          esac
+          # --- 1. CURRENT WEATHER ---
+          CURR_TEMP=$(echo "$RESPONSE" | jq '.current.temperature_2m')
+          CURR_FEELS=$(echo "$RESPONSE" | jq '.current.apparent_temperature')
+          CURR_CODE=$(echo "$RESPONSE" | jq '.current.weather_code')
+          CURR_COND=$(get_condition "$CURR_CODE")
 
-          # Construct multi-line body
+          # --- 2. TODAY'S OVERVIEW ---
+          TODAY_MAX=$(echo "$RESPONSE" | jq '.daily.temperature_2m_max[0]')
+          TODAY_MIN=$(echo "$RESPONSE" | jq '.daily.temperature_2m_min[0]')
+          TODAY_RAIN_PROB=$(echo "$RESPONSE" | jq '.daily.precipitation_probability_max[0]')
+
+          # --- 3. TONIGHT FORECAST (8:00 PM / 20:00 index) ---
+          NIGHT_TEMP=$(echo "$RESPONSE" | jq '.hourly.temperature_2m[20]')
+          NIGHT_CODE=$(echo "$RESPONSE" | jq '.hourly.weather_code[20]')
+          NIGHT_RAIN_PROB=$(echo "$RESPONSE" | jq '.hourly.precipitation_probability[20]')
+          NIGHT_COND=$(get_condition "$NIGHT_CODE")
+
+          # --- 4. TOMORROW FORECAST ---
+          TOMORROW_MAX=$(echo "$RESPONSE" | jq '.daily.temperature_2m_max[1]')
+          TOMORROW_MIN=$(echo "$RESPONSE" | jq '.daily.temperature_2m_min[1]')
+          TOMORROW_CODE=$(echo "$RESPONSE" | jq '.daily.weather_code[1]')
+          TOMORROW_RAIN_PROB=$(echo "$RESPONSE" | jq '.daily.precipitation_probability_max[1]')
+          TOMORROW_COND=$(get_condition "$TOMORROW_CODE")
+
+          # --- CONSTRUCT EMAIL BODY ---
           BODY=$(cat <<EOF
           Good morning!
 
-          Here is today's 7:00 AM weather update for Nakai, Tokyo:
+          Here is your weather update for Nakai, Tokyo:
 
-          • Condition: $CONDITION
-          • Temperature: ${TEMP}°C
-          • Feels Like: ${FEELS_LIKE}°C
-          • Relative Humidity: ${HUMIDITY}%
+          ----------------------------------------
+          📍 CURRENT (7:00 AM)
+          • Condition: $CURR_COND
+          • Temp: ${CURR_TEMP}°C (Feels like: ${CURR_FEELS}°C)
+
+          ----------------------------------------
+          ☀️ TODAY
+          • High / Low: ${TODAY_MAX}°C / ${TODAY_MIN}°C
+          • Max Rain Chance: ${TODAY_RAIN_PROB}%
+
+          ----------------------------------------
+          🌙 TONIGHT (8:00 PM)
+          • Condition: $NIGHT_COND
+          • Temp: ${NIGHT_TEMP}°C
+          • Rain Chance: ${NIGHT_RAIN_PROB}%
+
+          ----------------------------------------
+          📅 TOMORROW
+          • Condition: $TOMORROW_COND
+          • High / Low: ${TOMORROW_MAX}°C / ${TOMORROW_MIN}°C
+          • Max Rain Chance: ${TOMORROW_RAIN_PROB}%
 
           Have a great day!
           EOF
           )
 
-          # Store body in GITHUB_ENV for subsequent steps
+          # Pass formatted text to GITHUB_ENV
           {
             echo 'EMAIL_BODY<<EOF'
             echo "$BODY"
@@ -63,7 +101,7 @@ jobs:
           secure: true
           username: ${{ secrets.USER_EMAIL }}
           password: ${{ secrets.EMAIL_APP_PW }}
-          subject: "🌤️ Daily Weather Report - Nakai, Tokyo"
+          subject: "🌤️ Weather Forecast - Nakai, Tokyo"
           to: ${{ secrets.USER_EMAIL }}
           from: "Nakai Weather Bot"
           body: ${{ env.EMAIL_BODY }}
