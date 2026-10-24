@@ -1,0 +1,35 @@
+name: Zoom Nihongo Cafe Automation
+
+on:
+  schedule:
+    # Runs every Saturday at 01:05 UTC (10:05 AM JST)
+    - cron: "5 1 * * 6"
+  workflow_dispatch: # Allows manual triggers from the GitHub Actions tab
+
+jobs:
+  run-automation:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Browsers & Dependencies
+        run: npx playwright install --with-deps
+
+      - name: Create .env file from Secrets
+        run: |
+          echo "USER_FIRST_NAME=${{ secrets.USER_FIRST_NAME }}" >> .env
+          echo "USER_LAST_NAME=${{ secrets.USER_LAST_NAME }}" >> .env
+          echo "USER_EMAIL=${{ secrets.USER_EMAIL }}" >> .env
+
+      - name: Run automation script
+        run: npx tsx automation.ts
