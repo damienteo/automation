@@ -1,0 +1,69 @@
+name: Nakai Morning Weather
+
+on:
+  workflow_dispatch:
+
+jobs:
+  send-weather-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch Weather Data
+        id: fetch_weather
+        run: |
+          # Fetch current weather data for Nakai, Tokyo (Lat: 35.7146, Lon: 139.6867)
+          RESPONSE=$(curl -s "https://api.open-meteo.com/v1/forecast?latitude=35.7146&longitude=139.6867&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code")
+
+          # Parse JSON output using jq
+          TEMP=$(echo "$RESPONSE" | jq '.current.temperature_2m')
+          FEELS_LIKE=$(echo "$RESPONSE" | jq '.current.apparent_temperature')
+          HUMIDITY=$(echo "$RESPONSE" | jq '.current.relative_humidity_2m')
+          WMO_CODE=$(echo "$RESPONSE" | jq '.current.weather_code')
+
+          # Map basic WMO weather codes to readable descriptions
+          case $WMO_CODE in
+            0) CONDITION="Clear sky ☀️" ;;
+            1|2|3) CONDITION="Mainly clear / Partly cloudy ⛅" ;;
+            45|48) CONDITION="Foggy 🌫️" ;;
+            51|53|55) CONDITION="Drizzle 🌧️" ;;
+            61|63|65) CONDITION="Rain 🌧️" ;;
+            71|73|75) CONDITION="Snow ❄️" ;;
+            80|81|82) CONDITION="Rain showers 🌦️" ;;
+            95|96|99) CONDITION="Thunderstorm 🌩️" ;;
+            *) CONDITION="Code $WMO_CODE" ;;
+          esac
+
+          # Construct multi-line body
+          BODY=$(cat <<EOF
+          Good morning!
+
+          Here is today's 7:00 AM weather update for Nakai, Tokyo:
+
+          • Condition: $CONDITION
+          • Temperature: ${TEMP}°C
+          • Feels Like: ${FEELS_LIKE}°C
+          • Relative Humidity: ${HUMIDITY}%
+
+          Have a great day!
+          EOF
+          )
+
+          # Store body in GITHUB_ENV for subsequent steps
+          {
+            echo 'EMAIL_BODY<<EOF'
+            echo "$BODY"
+            echo 'EOF'
+          } >> $GITHUB_ENV
+
+      - name: Send Morning Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.USER_EMAIL }}
+          password: ${{ secrets.EMAIL_APP_PW }}
+          subject: "🌤️ Daily Weather Report - Nakai, Tokyo"
+          to: ${{ secrets.USER_EMAIL }}
+          from: "Nakai Weather Bot"
+          body: ${{ env.EMAIL_BODY }}
