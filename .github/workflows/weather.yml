@@ -67,7 +67,7 @@ jobs:
           ----------------------------------------
           📍 CURRENT (7:00 AM)
           • Condition: $CURR_COND
-          • Temp: ${CURR_TEMP}°C (Feels like:${CURR_FEELS}°C)
+          • Temp: ${CURR_TEMP}°C (Feels like: ${CURR_FEELS}°C)
 
           ----------------------------------------
           ☀️ TODAY
@@ -88,3 +88,26 @@ jobs:
           • Max Rain Chance: ${TOMORROW_RAIN_PROB}%
 
           Have a great day!
+          EOF
+          )
+
+          # Pass values to GITHUB_ENV
+          echo "TODAY_DATE=$TODAY_DATE" >> $GITHUB_ENV
+          {
+            echo 'EMAIL_BODY<<EOF'
+            echo "$BODY"
+            echo 'EOF'
+          } >> $GITHUB_ENV
+
+      - name: Send Morning Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.USER_EMAIL }}
+          password: ${{ secrets.EMAIL_APP_PW }}
+          subject: "🌤️ Daily Weather Report (${{ env.TODAY_DATE }}) - Nakai, Tokyo"
+          to: ${{ secrets.USER_EMAIL }}
+          from: "Nakai Weather Bot"
+          body: ${{ env.EMAIL_BODY }}
