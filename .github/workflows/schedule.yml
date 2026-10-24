@@ -1,9 +1,6 @@
 name: Zoom Nihongo Cafe Automation
 
 on:
-  schedule:
-    # Runs every Saturday at 01:05 UTC (10:05 AM JST)
-    - cron: "5 1 * * 6"
   workflow_dispatch: # Allows manual triggers from the GitHub Actions tab
 
 jobs:
