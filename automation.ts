@@ -19,12 +19,12 @@ export const isUpcomingWednesdayLastOfMonth = (
 };
 
 const runAutomation = async (): Promise<void> => {
-  //   if (isUpcomingWednesdayLastOfMonth()) {
-  //     console.log(
-  //       "Skipping registration: The upcoming Wednesday is the last Wednesday of the month (in-person event day).",
-  //     );
-  //     process.exit(0);
-  //   }
+  if (isUpcomingWednesdayLastOfMonth()) {
+    console.log(
+      "Skipping registration: The upcoming Wednesday is the last Wednesday of the month (in-person event day).",
+    );
+    process.exit(0);
+  }
 
   console.log("Proceeding with registration for the online Zoom event...");
 
@@ -105,7 +105,10 @@ const runAutomation = async (): Promise<void> => {
     const submitButton = page.getByRole("button", { name: /送信|Submit/i });
     await submitButton.waitFor({ state: "visible" });
     console.log("Submit button successfully found.");
-    await page.getByRole("button", { name: /送信|Submit/i }).click();
+
+    // Brief stabilization pause and forced click to bypass Wix layout shifts/overlays
+    await page.waitForTimeout(500);
+    await submitButton.click({ force: true });
     console.log("Registration submitted successfully!");
 
     await page.waitForTimeout(3000);
