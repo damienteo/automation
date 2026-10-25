@@ -15,9 +15,13 @@ jobs:
         run: |
           # 1. Fetch top headline from BBC News RSS feed
           RSS_DATA=$(curl -s "https://feeds.bbci.co.uk/news/world/rss.xml")
-          TITLE=$(echo "$RSS_DATA" | xmllint --xpath "string(//item[1]/title)" -)
-          DESCRIPTION=$(echo "$RSS_DATA" | xmllint --xpath "string(//item[1]/description)" -)
-          ARTICLE_LINK=$(echo "$RSS_DATA" | xmllint --xpath "string(//item[1]/link)" -)
+
+          # Parse XML elements safely using a single-line Python command
+          NEWS_JSON=$(echo "$RSS_DATA" | python3 -c "import xml.etree.ElementTree as ET, json, sys; root = ET.fromstring(sys.stdin.read()); item = root.find('.//channel/item'); print(json.dumps({'title': item.find('title').text if item.find('title') is not None else '', 'description': item.find('description').text if item.find('description') is not None else '', 'link': item.find('link').text if item.find('link') is not None else ''}))")
+
+          TITLE=$(echo "$NEWS_JSON" | jq -r '.title')
+          DESCRIPTION=$(echo "$NEWS_JSON" | jq -r '.description')
+          ARTICLE_LINK=$(echo "$NEWS_JSON" | jq -r '.link')
 
           TODAY_DATE=$(TZ="Asia/Tokyo" date +'%A, %B %d, %Y')
 
@@ -38,14 +42,14 @@ jobs:
           EOF
           )
 
-          # Escaping prompt payload for JSON
+          # Escape prompt payload safely into JSON using jq
           JSON_PAYLOAD=$(jq -n --arg prompt "$PROMPT" '{
             contents: [{
               parts: [{ text: $prompt }]
             }]
           }')
 
-          # 3. Call Gemini 1.5 Flash API using AI_API_KEY
+          # 3. Call Gemini 3.8 Flash API endpoint
           RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${AI_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$JSON_PAYLOAD")
@@ -65,7 +69,7 @@ jobs:
           EOF
           )
 
-          # Export variables for GitHub Actions environment
+          # Export variables into GITHUB_ENV
           echo "TODAY_DATE=$TODAY_DATE" >> $GITHUB_ENV
           {
             echo 'EMAIL_BODY<<EOF'
