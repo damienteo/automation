@@ -2,7 +2,7 @@ name: Daily News Digest
 
 on:
   workflow_dispatch:
-  # Optional: Runs daily at 7:00 AM Tokyo Time (22:00 UTC previous day)
+  # Optional: Automatically runs daily at 7:00 AM Tokyo Time (22:00 UTC previous day)
   # schedule:
   #   - cron: '0 22 * * *'
 
@@ -29,6 +29,7 @@ jobs:
                   self.in_p = False
                   self.in_article = False
                   self.curr = []
+
               def handle_starttag(self, tag, attrs):
                   d = dict(attrs)
                   if tag == 'article' or d.get('role') == 'main':
@@ -36,22 +37,24 @@ jobs:
                   if tag == 'p' and self.in_article:
                       self.in_p = True
                       self.curr = []
+
               def handle_endtag(self, tag):
                   if tag == 'p' and self.in_p:
                       self.in_p = False
                       t = ''.join(self.curr).strip()
-                      # Filter non-article boilerplate (video player labels, captions, ads)
+                      # Filter out non-article boilerplates (video players, captions, ads)
                       if len(t) > 30 and not any(t.startswith(x) for x in ['Watch:', 'Listen to', 'This video', 'Image source', 'Published']):
                           self.paragraphs.append(html.unescape(t))
                   if tag == 'article':
                       self.in_article = False
+
               def handle_data(self, data):
                   if self.in_p:
                       self.curr.append(data)
 
           headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) NewsDigestBot/1.0'}
 
-          # 1a. Fetch RSS for latest headline link
+          # Fetch RSS for top headline link
           rss_req = urllib.request.Request('https://feeds.bbci.co.uk/news/world/rss.xml', headers=headers)
           with urllib.request.urlopen(rss_req) as resp:
               root = ET.fromstring(resp.read())
@@ -59,7 +62,7 @@ jobs:
           title = item.find('title').text.strip()
           link = item.find('link').text.strip()
 
-          # 1b. Fetch full article HTML and extract clean paragraphs
+          # Fetch full article HTML and extract paragraphs
           art_req = urllib.request.Request(link, headers=headers)
           with urllib.request.urlopen(art_req) as resp2:
               html_content = resp2.read().decode('utf-8', errors='ignore')
@@ -67,8 +70,8 @@ jobs:
           parser = BBCArticleParser()
           parser.feed(html_content)
 
-          # Extracts top 15 core paragraphs (change to `parser.paragraphs` for the complete article)
-          selected_paragraphs = parser.paragraphs[:15]
+          # Extracts clean paragraphs from the story
+          selected_paragraphs = parser.paragraphs[:15] if len(parser.paragraphs) > 15 else parser.paragraphs
           full_article = '\n\n'.join(selected_paragraphs)
 
           with open('/tmp/news.json', 'w') as f:
@@ -93,24 +96,30 @@ jobs:
           Article Content:
           $ARTICLE_TEXT
 
-          Break down the text sentence by sentence. For EVERY sentence, provide:
+          Break down the text sentence by sentence for the ENTIRE article from start to finish.
+          For EVERY sentence, provide:
           1. EN: [Original English sentence]
           2. ZH: [Mandarin Chinese translation]
           3. PY: [Hanyu Pinyin with tone marks]
           4. JA: [Natural Japanese translation]
           5. RM: [Hepburn Romaji pronunciation]
 
-          Keep the output in clear plain text, structured clearly per sentence.
+          Rules:
+          - Translate EVERY sentence across the entire article. Do not stop early or summarize.
+          - Output strictly the line-by-line breakdown without introductory remarks or conversational filler.
           EOF
           )
 
-          # Escape prompt payload safely into JSON using jq with high output token budget
+          # Escape prompt payload safely into JSON with 16,384 tokens and low thinking overhead
           JSON_PAYLOAD=$(jq -n --arg prompt "$PROMPT" '{
             contents: [{
               parts: [{ text: $prompt }]
             }],
             generationConfig: {
-              maxOutputTokens: 8192
+              maxOutputTokens: 16384,
+              thinkingConfig: {
+                thinkingLevel: "LOW"
+              }
             }
           }')
 
