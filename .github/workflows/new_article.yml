@@ -13,11 +13,11 @@ jobs:
         env:
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
         run: |
-          # 1. Fetch top headline from BBC News RSS feed
-          RSS_DATA=$(curl -s "https://feeds.bbci.co.uk/news/world/rss.xml")
+          # 1. Fetch top headline from BBC News RSS feed (with User-Agent)
+          RSS_DATA=$(curl -fsSL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NewsDigest/1.0" "https://feeds.bbci.co.uk/news/world/rss.xml")
 
-          # Parse XML elements safely using a single-line Python command
-          NEWS_JSON=$(echo "$RSS_DATA" | python3 -c "import xml.etree.ElementTree as ET, json, sys; root = ET.fromstring(sys.stdin.read()); item = root.find('.//channel/item'); print(json.dumps({'title': item.find('title').text if item.find('title') is not None else '', 'description': item.find('description').text if item.find('description') is not None else '', 'link': item.find('link').text if item.find('link') is not None else ''}))")
+          # Parse XML elements cleanly using Python (one-line prevents YAML indentation errors)
+          NEWS_JSON=$(python3 -c "import xml.etree.ElementTree as ET, json, sys, html; root = ET.fromstring(sys.stdin.read()); item = root.find('.//channel/item'); clean = lambda t: html.unescape(item.find(t).text.strip()) if item is not None and item.find(t) is not None and item.find(t).text else ''; print(json.dumps({'title': clean('title'), 'description': clean('description'), 'link': clean('link')}))" <<< "$RSS_DATA")
 
           TITLE=$(echo "$NEWS_JSON" | jq -r '.title')
           DESCRIPTION=$(echo "$NEWS_JSON" | jq -r '.description')
@@ -49,12 +49,23 @@ jobs:
             }]
           }')
 
-          # 3. Call Gemini 3.8 Flash API endpoint
+          # 3. Call latest Gemini 3.8 Flash endpoint with error verification
           RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${AI_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$JSON_PAYLOAD")
 
-          PARSED_CONTENT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text')
+          # Check for API error status (e.g. rate limit, bad key)
+          API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty')
+          if [ -n "$API_ERROR" ]; then
+            echo "::error::Gemini API call failed: $API_ERROR"
+            exit 1
+          fi
+
+          PARSED_CONTENT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
+          if [ -z "$PARSED_CONTENT" ]; then
+            echo "::error::Gemini returned empty or blocked content."
+            exit 1
+          fi
 
           # 4. Construct Email Body
           BODY=$(cat <<EOF
@@ -69,12 +80,13 @@ jobs:
           EOF
           )
 
-          # Export variables into GITHUB_ENV
+          # Export variables with collision-proof delimiter
+          EOF_DELIM=$(openssl rand -hex 8)
           echo "TODAY_DATE=$TODAY_DATE" >> $GITHUB_ENV
           {
-            echo 'EMAIL_BODY<<EOF'
+            echo "EMAIL_BODY<<$EOF_DELIM"
             echo "$BODY"
-            echo 'EOF'
+            echo "$EOF_DELIM"
           } >> $GITHUB_ENV
 
       - name: Send Email Digest
