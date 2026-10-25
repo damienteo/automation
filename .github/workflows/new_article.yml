@@ -2,34 +2,96 @@ name: Daily News Digest
 
 on:
   workflow_dispatch:
+  # Optional: Runs daily at 7:00 AM Tokyo Time (22:00 UTC previous day)
+  # schedule:
+  #   - cron: '0 22 * * *'
 
 jobs:
   generate-digest:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Fetch News and Generate Breakdown
+      - name: Fetch Full Article & Generate Line-by-Line Breakdown
         id: process_news
         env:
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
         run: |
-          # 1. Fetch top headline from BBC News RSS feed (with User-Agent)
-          RSS_DATA=$(curl -fsSL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NewsDigest/1.0" "https://feeds.bbci.co.uk/news/world/rss.xml")
+          # 1. Fetch RSS and scrape FULL article text using Python (zero extra dependencies)
+          python3 - << 'PY_EOF' > /tmp/news.json
+          import urllib.request, json, html, sys
+          import xml.etree.ElementTree as ET
+          from html.parser import HTMLParser
 
-          # Parse XML elements cleanly using Python (one-line prevents YAML indentation errors)
-          NEWS_JSON=$(python3 -c "import xml.etree.ElementTree as ET, json, sys, html; root = ET.fromstring(sys.stdin.read()); item = root.find('.//channel/item'); clean = lambda t: html.unescape(item.find(t).text.strip()) if item is not None and item.find(t) is not None and item.find(t).text else ''; print(json.dumps({'title': clean('title'), 'description': clean('description'), 'link': clean('link')}))" <<< "$RSS_DATA")
+          class BBCArticleParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.paragraphs = []
+                  self.in_p = False
+                  self.in_article = False
+                  self.curr = []
+              def handle_starttag(self, tag, attrs):
+                  d = dict(attrs)
+                  if tag == 'article' or d.get('role') == 'main':
+                      self.in_article = True
+                  if tag == 'p' and self.in_article:
+                      self.in_p = True
+                      self.curr = []
+              def handle_endtag(self, tag):
+                  if tag == 'p' and self.in_p:
+                      self.in_p = False
+                      t = ''.join(self.curr).strip()
+                      # Filter non-article boilerplate (video player labels, captions, ads)
+                      if len(t) > 30 and not any(t.startswith(x) for x in ['Watch:', 'Listen to', 'This video', 'Image source', 'Published']):
+                          self.paragraphs.append(html.unescape(t))
+                  if tag == 'article':
+                      self.in_article = False
+              def handle_data(self, data):
+                  if self.in_p:
+                      self.curr.append(data)
 
-          TITLE=$(echo "$NEWS_JSON" | jq -r '.title')
-          DESCRIPTION=$(echo "$NEWS_JSON" | jq -r '.description')
-          ARTICLE_LINK=$(echo "$NEWS_JSON" | jq -r '.link')
+          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) NewsDigestBot/1.0'}
+
+          # 1a. Fetch RSS for latest headline link
+          rss_req = urllib.request.Request('https://feeds.bbci.co.uk/news/world/rss.xml', headers=headers)
+          with urllib.request.urlopen(rss_req) as resp:
+              root = ET.fromstring(resp.read())
+          item = root.find('.//channel/item')
+          title = item.find('title').text.strip()
+          link = item.find('link').text.strip()
+
+          # 1b. Fetch full article HTML and extract clean paragraphs
+          art_req = urllib.request.Request(link, headers=headers)
+          with urllib.request.urlopen(art_req) as resp2:
+              html_content = resp2.read().decode('utf-8', errors='ignore')
+
+          parser = BBCArticleParser()
+          parser.feed(html_content)
+
+          # Extracts top 15 core paragraphs (change to `parser.paragraphs` for the complete article)
+          selected_paragraphs = parser.paragraphs[:15]
+          full_article = '\n\n'.join(selected_paragraphs)
+
+          with open('/tmp/news.json', 'w') as f:
+              json.dump({
+                  'title': html.unescape(title),
+                  'link': link,
+                  'paragraphs_count': len(selected_paragraphs),
+                  'full_text': full_article
+              }, f)
+          PY_EOF
+
+          TITLE=$(jq -r '.title' /tmp/news.json)
+          ARTICLE_LINK=$(jq -r '.link' /tmp/news.json)
+          ARTICLE_TEXT=$(jq -r '.full_text' /tmp/news.json)
 
           TODAY_DATE=$(TZ="Asia/Tokyo" date +'%A, %B %d, %Y')
 
-          # 2. Construct Prompt for Gemini API
+          # 2. Construct Prompt for Gemini API with the FULL article text
           PROMPT=$(cat <<EOF
-          Analyze the following news item:
+          Analyze the following complete news article:
           Title: $TITLE
-          Summary: $DESCRIPTION
+          Article Content:
+          $ARTICLE_TEXT
 
           Break down the text sentence by sentence. For EVERY sentence, provide:
           1. EN: [Original English sentence]
@@ -42,19 +104,28 @@ jobs:
           EOF
           )
 
-          # Escape prompt payload safely into JSON using jq
+          # Escape prompt payload safely into JSON using jq with high output token budget
           JSON_PAYLOAD=$(jq -n --arg prompt "$PROMPT" '{
             contents: [{
               parts: [{ text: $prompt }]
-            }]
+            }],
+            generationConfig: {
+              maxOutputTokens: 8192
+            }
           }')
 
-          # 3. Call latest Gemini 3.8 Flash endpoint with error verification
-          RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${AI_API_KEY}" \
+          # 3. Verify API Key and Call Gemini 3.8 Flash
+          if [ -z "$AI_API_KEY" ]; then
+            echo "::error::AI_API_KEY is empty! Add it under Repository Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
             -H "Content-Type: application/json" \
+            -H "x-goog-api-key: ${AI_API_KEY}" \
             -d "$JSON_PAYLOAD")
 
-          # Check for API error status (e.g. rate limit, bad key)
+          # Check for API error status
           API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty')
           if [ -n "$API_ERROR" ]; then
             echo "::error::Gemini API call failed: $API_ERROR"
