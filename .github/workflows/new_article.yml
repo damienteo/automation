@@ -71,14 +71,14 @@ jobs:
           parser.feed(html_content)
 
           # Extracts clean paragraphs from the story
-          selected_paragraphs = parser.paragraphs[:15] if len(parser.paragraphs) > 15 else parser.paragraphs
+          selected_paragraphs = parser.paragraphs
           full_article = '\n\n'.join(selected_paragraphs)
 
           with open('/tmp/news.json', 'w') as f:
               json.dump({
                   'title': html.unescape(title),
                   'link': link,
-                  'paragraphs_count': len(selected_paragraphs),
+                  'paragraphs_count': len(parser.paragraphs),
                   'full_text': full_article
               }, f)
           PY_EOF
