@@ -1,0 +1,87 @@
+name: Daily News Digest
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate-digest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch News and Generate Breakdown
+        id: process_news
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: |
+          # 1. Fetch top headline from BBC News RSS feed
+          RSS_DATA=$(curl -s "https://feeds.bbci.co.uk/news/world/rss.xml")
+          TITLE=$(echo "$RSS_DATA" | xmllint --xpath "string(//item[1]/title)" -)
+          DESCRIPTION=$(echo "$RSS_DATA" | xmllint --xpath "string(//item[1]/description)" -)
+          ARTICLE_LINK=$(echo "$RSS_DATA" | xmllint --xpath "string(//item[1]/link)" -)
+
+          TODAY_DATE=$(TZ="Asia/Tokyo" date +'%A, %B %d, %Y')
+
+          # 2. Construct Prompt for Gemini API
+          PROMPT=$(cat <<EOF
+          Analyze the following news item:
+          Title: $TITLE
+          Summary: $DESCRIPTION
+
+          Break down the text sentence by sentence. For EVERY sentence, provide:
+          1. EN: [Original English sentence]
+          2. ZH: [Mandarin Chinese translation]
+          3. PY: [Hanyu Pinyin with tone marks]
+          4. JA: [Natural Japanese translation]
+          5. RM: [Hepburn Romaji pronunciation]
+
+          Keep the output in clear plain text, structured clearly per sentence.
+          EOF
+          )
+
+          # Escaping prompt payload for JSON
+          JSON_PAYLOAD=$(jq -n --arg prompt "$PROMPT" '{
+            contents: [{
+              parts: [{ text: $prompt }]
+            }]
+          }')
+
+          # 3. Call Gemini 1.5 Flash API using AI_API_KEY
+          RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${AI_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$JSON_PAYLOAD")
+
+          PARSED_CONTENT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text')
+
+          # 4. Construct Email Body
+          BODY=$(cat <<EOF
+          📰 DAILY NEWS DIGEST ($TODAY_DATE)
+          Original Article: $ARTICLE_LINK
+
+          ========================================
+          $PARSED_CONTENT
+          ========================================
+
+          Have a great day!
+          EOF
+          )
+
+          # Export variables for GitHub Actions environment
+          echo "TODAY_DATE=$TODAY_DATE" >> $GITHUB_ENV
+          {
+            echo 'EMAIL_BODY<<EOF'
+            echo "$BODY"
+            echo 'EOF'
+          } >> $GITHUB_ENV
+
+      - name: Send Email Digest
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.USER_EMAIL }}
+          password: ${{ secrets.EMAIL_APP_PW }}
+          subject: "📰 Daily News Line-by-Line Breakdown (${{ env.TODAY_DATE }})"
+          to: ${{ secrets.USER_EMAIL }}
+          from: "News Digest Bot"
+          body: ${{ env.EMAIL_BODY }}
