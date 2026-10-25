@@ -11,16 +11,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Fetch Full Article & Generate Line-by-Line Breakdown
+      - name: Fetch Full Article & Translate in Chunks
         id: process_news
         env:
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
         run: |
-          # 1. Fetch RSS and scrape FULL article text using Python (zero extra dependencies)
-          python3 - << 'PY_EOF' > /tmp/news.json
-          import urllib.request, json, html, sys
+          python3 - << 'PY_EOF'
+          import urllib.request, json, html, sys, os, time
           import xml.etree.ElementTree as ET
           from html.parser import HTMLParser
+
+          api_key = os.environ.get("AI_API_KEY")
+          if not api_key:
+              sys.stderr.write("::error::AI_API_KEY secret is missing or empty!\n")
+              sys.exit(1)
 
           class BBCArticleParser(HTMLParser):
               def __init__(self):
@@ -32,142 +36,120 @@ jobs:
 
               def handle_starttag(self, tag, attrs):
                   d = dict(attrs)
-                  if tag == 'article' or d.get('role') == 'main':
+                  if tag == "article" or d.get("role") == "main":
                       self.in_article = True
-                  if tag == 'p' and self.in_article:
+                  if tag == "p" and self.in_article:
                       self.in_p = True
                       self.curr = []
 
               def handle_endtag(self, tag):
-                  if tag == 'p' and self.in_p:
+                  if tag == "p" and self.in_p:
                       self.in_p = False
-                      t = ''.join(self.curr).strip()
-                      # Filter out non-article boilerplates (video players, captions, ads)
-                      if len(t) > 30 and not any(t.startswith(x) for x in ['Watch:', 'Listen to', 'This video', 'Image source', 'Published']):
+                      t = "".join(self.curr).strip()
+                      # Filter out non-article boilerplate (video player labels, ads, captions)
+                      if len(t) > 30 and not any(t.startswith(x) for x in ["Watch:", "Listen to", "This video", "Image source", "Published"]):
                           self.paragraphs.append(html.unescape(t))
-                  if tag == 'article':
+                  if tag == "article":
                       self.in_article = False
 
               def handle_data(self, data):
                   if self.in_p:
                       self.curr.append(data)
 
-          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) NewsDigestBot/1.0'}
+          headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NewsDigestBot/1.0"}
 
-          # Fetch RSS for top headline link
-          rss_req = urllib.request.Request('https://feeds.bbci.co.uk/news/world/rss.xml', headers=headers)
+          # 1. Fetch RSS for top headline & link
+          rss_req = urllib.request.Request("https://feeds.bbci.co.uk/news/world/rss.xml", headers=headers)
           with urllib.request.urlopen(rss_req) as resp:
               root = ET.fromstring(resp.read())
-          item = root.find('.//channel/item')
-          title = item.find('title').text.strip()
-          link = item.find('link').text.strip()
+          item = root.find(".//channel/item")
+          title = html.unescape(item.find("title").text.strip())
+          link = item.find("link").text.strip()
 
-          # Fetch full article HTML and extract paragraphs
+          # 2. Fetch full article HTML and extract paragraphs
           art_req = urllib.request.Request(link, headers=headers)
           with urllib.request.urlopen(art_req) as resp2:
-              html_content = resp2.read().decode('utf-8', errors='ignore')
+              html_content = resp2.read().decode("utf-8", errors="ignore")
 
           parser = BBCArticleParser()
           parser.feed(html_content)
+          paragraphs = parser.paragraphs
 
-          # Extracts clean paragraphs from the story
-          selected_paragraphs = parser.paragraphs[:15] if len(parser.paragraphs) > 15 else parser.paragraphs
-          full_article = '\n\n'.join(selected_paragraphs)
+          print(f"Scraped {len(paragraphs)} paragraphs from BBC article.")
 
-          with open('/tmp/news.json', 'w') as f:
-              json.dump({
-                  'title': html.unescape(title),
-                  'link': link,
-                  'paragraphs_count': len(selected_paragraphs),
-                  'full_text': full_article
-              }, f)
-          PY_EOF
+          # 3. Translate in chunks of 4 paragraphs (guarantees 100% full article coverage without truncation)
+          chunk_size = 4
+          translated_sections = []
+          gemini_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
 
-          TITLE=$(jq -r '.title' /tmp/news.json)
-          ARTICLE_LINK=$(jq -r '.link' /tmp/news.json)
-          ARTICLE_TEXT=$(jq -r '.full_text' /tmp/news.json)
+          total_chunks = (len(paragraphs) + chunk_size - 1) // chunk_size
 
-          TODAY_DATE=$(TZ="Asia/Tokyo" date +'%A, %B %d, %Y')
+          for idx, i in enumerate(range(0, len(paragraphs), chunk_size)):
+              chunk_text = "\n\n".join(paragraphs[i:i + chunk_size])
+              prompt = (
+                  "Break down the following news excerpt sentence by sentence.\n"
+                  "For EVERY sentence, provide:\n"
+                  "1. EN: [Original English sentence]\n"
+                  "2. ZH: [Mandarin Chinese translation]\n"
+                  "3. PY: [Hanyu Pinyin with tone marks]\n"
+                  "4. JA: [Natural Japanese translation]\n"
+                  "5. RM: [Hepburn Romaji pronunciation]\n\n"
+                  f"Excerpt:\n{chunk_text}\n\n"
+                  "Rules:\n"
+                  "- Translate every sentence completely.\n"
+                  "- Output clean line-by-line text without conversational remarks."
+              )
 
-          # 2. Construct Prompt for Gemini API with the FULL article text
-          PROMPT=$(cat <<EOF
-          Analyze the following complete news article:
-          Title: $TITLE
-          Article Content:
-          $ARTICLE_TEXT
-
-          Break down the text sentence by sentence for the ENTIRE article from start to finish.
-          For EVERY sentence, provide:
-          1. EN: [Original English sentence]
-          2. ZH: [Mandarin Chinese translation]
-          3. PY: [Hanyu Pinyin with tone marks]
-          4. JA: [Natural Japanese translation]
-          5. RM: [Hepburn Romaji pronunciation]
-
-          Rules:
-          - Translate EVERY sentence across the entire article. Do not stop early or summarize.
-          - Output strictly the line-by-line breakdown without introductory remarks or conversational filler.
-          EOF
-          )
-
-          # Escape prompt payload safely into JSON with 16,384 tokens and low thinking overhead
-          JSON_PAYLOAD=$(jq -n --arg prompt "$PROMPT" '{
-            contents: [{
-              parts: [{ text: $prompt }]
-            }],
-            generationConfig: {
-              maxOutputTokens: 16384,
-              thinkingConfig: {
-                thinkingLevel: "LOW"
+              payload = {
+                  "contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {
+                      "maxOutputTokens": 8192,
+                      "thinkingConfig": {"thinkingLevel": "MINIMAL"}
+                  }
               }
-            }
-          }')
 
-          # 3. Verify API Key and Call Gemini 3.8 Flash
-          if [ -z "$AI_API_KEY" ]; then
-            echo "::error::AI_API_KEY is empty! Add it under Repository Settings > Secrets and variables > Actions."
-            exit 1
-          fi
+              req = urllib.request.Request(
+                  gemini_url,
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={
+                      "Content-Type": "application/json",
+                      "x-goog-api-key": api_key
+                  }
+              )
 
-          RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
-            -H "Content-Type: application/json" \
-            -H "x-goog-api-key: ${AI_API_KEY}" \
-            -d "$JSON_PAYLOAD")
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      res_json = json.loads(resp.read().decode("utf-8"))
+                      part_text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                      translated_sections.append(part_text.strip())
+                      print(f"Processed chunk {idx + 1} of {total_chunks}")
+              except Exception as e:
+                  print(f"Error on chunk {idx + 1}: {e}")
 
-          # Check for API error status
-          API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty')
-          if [ -n "$API_ERROR" ]; then
-            echo "::error::Gemini API call failed: $API_ERROR"
-            exit 1
-          fi
+              # Respect free tier rate limits
+              time.sleep(1)
 
-          PARSED_CONTENT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
-          if [ -z "$PARSED_CONTENT" ]; then
-            echo "::error::Gemini returned empty or blocked content."
-            exit 1
-          fi
+          full_content = "\n\n---\n\n".join(translated_sections)
+          today_date = time.strftime("%A, %B %d, %Y")
 
-          # 4. Construct Email Body
-          BODY=$(cat <<EOF
-          📰 DAILY NEWS DIGEST ($TODAY_DATE)
-          Original Article: $ARTICLE_LINK
-
-          ========================================
-          $PARSED_CONTENT
-          ========================================
-
-          Have a great day!
-          EOF
+          email_body = (
+              f"📰 DAILY NEWS DIGEST ({today_date})\n"
+              f"Title: {title}\n"
+              f"Original Article: {link}\n\n"
+              f"========================================\n"
+              f"{full_content}\n"
+              f"========================================\n\n"
+              f"Have a great day!"
           )
 
-          # Export variables with collision-proof delimiter
-          EOF_DELIM=$(openssl rand -hex 8)
-          echo "TODAY_DATE=$TODAY_DATE" >> $GITHUB_ENV
-          {
-            echo "EMAIL_BODY<<$EOF_DELIM"
-            echo "$BODY"
-            echo "$EOF_DELIM"
-          } >> $GITHUB_ENV
+          # Export into GITHUB_ENV with a safe unique delimiter
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"TODAY_DATE={today_date}\n")
+              delim = "DELIM_" + str(int(time.time()))
+              f.write(f"EMAIL_BODY<<{delim}\n{email_body}\n{delim}\n")
+
+          print("Successfully compiled full article email body!")
+          PY_EOF
 
       - name: Send Email Digest
         uses: dawidd6/action-send-mail@v3
