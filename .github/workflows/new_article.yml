@@ -123,21 +123,34 @@ jobs:
             }
           }')
 
-          # 3. Verify API Key and Call Gemini 3.8 Flash
-          if [ -z "$AI_API_KEY" ]; then
-            echo "::error::AI_API_KEY is empty! Add it under Repository Settings > Secrets and variables > Actions."
-            exit 1
-          fi
+          # 3. Call Gemini API with automatic retry logic for temporary high demand
+          MAX_RETRIES=3
+          RETRY_DELAY=10
+          RESPONSE=""
 
-          RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
-            -H "Content-Type: application/json" \
-            -H "x-goog-api-key: ${AI_API_KEY}" \
-            -d "$JSON_PAYLOAD")
+          for ((i=1; i<=MAX_RETRIES; i++)); do
+            RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
+              -H "Content-Type: application/json" \
+              -H "x-goog-api-key: ${AI_API_KEY}" \
+              -d "$JSON_PAYLOAD")
 
-          # Check for API error status
-          API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty')
+            API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty')
+            
+            if [ -z "$API_ERROR" ]; then
+              break
+            fi
+
+            echo "⚠️ Attempt $i failed due to high demand: $API_ERROR"
+            if [ $i -lt $MAX_RETRIES ]; then
+              echo "Retrying in ${RETRY_DELAY} seconds..."
+              sleep $RETRY_DELAY
+              RETRY_DELAY=$((RETRY_DELAY * 2)) # Exponential backoff: 10s, 20s
+            fi
+          done
+
+          # Final check after retries
           if [ -n "$API_ERROR" ]; then
-            echo "::error::Gemini API call failed: $API_ERROR"
+            echo "::error::Gemini API call failed after $MAX_RETRIES attempts: $API_ERROR"
             exit 1
           fi
 
