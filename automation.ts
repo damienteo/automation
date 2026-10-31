@@ -72,7 +72,11 @@ const runAutomation = async (): Promise<void> => {
       .click();
 
     // フォーム画面の読み込み待機
-    await page.waitForSelector("input", { state: "visible" });
+    console.log("Waiting for form inputs to render...");
+    await page.waitForSelector("#firstName", {
+      state: "visible",
+      timeout: 15000,
+    });
     console.log("Successfully reached the registration form.");
 
     await page.fill("#firstName", process.env.USER_FIRST_NAME || "");
