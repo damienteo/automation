@@ -98,18 +98,64 @@ const runAutomation = async (): Promise<void> => {
     }
     console.log("All required fields verified successfully.");
 
+    // Ensure the "いいえ no" (No) checkbox for Ota-ku residency is checked
+    console.log("Checking 'No' for Ota-ku residency...");
+
+    const noCheckbox = page
+      .locator('div[role="checkbox"]')
+      .filter({ hasText: "いいえ no" });
+
+    // Check its current state, click only if it's not already checked
+    const isChecked = await noCheckbox.getAttribute("aria-checked");
+    if (isChecked !== "true") {
+      await noCheckbox.click();
+      console.log("'No' checkbox clicked.");
+    } else {
+      console.log("'No' checkbox is already checked.");
+    }
+
     // Click the Submit button (送信 Submit)
     console.log("Submitting the form...");
-
-    console.log("Verifying the submit button is present...");
-    const submitButton = page.getByRole("button", { name: /送信|Submit/i });
-    await submitButton.waitFor({ state: "visible" });
-    console.log("Submit button successfully found.");
+    // Click the Form button (handles "次へ" / Next or "送信" / Submit)
+    console.log("Verifying the form button is present...");
+    const formButton = page
+      .locator('button[data-hook="form-button"]')
+      .or(page.getByRole("button", { name: /次へ|送信|Submit|Next/i }));
+    await formButton.waitFor({ state: "visible" });
+    console.log("Form button successfully found.");
 
     // Brief stabilization pause and forced click to bypass Wix layout shifts/overlays
     await page.waitForTimeout(500);
-    await submitButton.click({ force: true });
-    console.log("Registration submitted successfully!");
+    await formButton.click({ force: true });
+    console.log("Form action completed successfully!");
+
+    // --- STEP 2: Event Policy Agreement ---
+    console.log("Handling event policy agreement step...");
+
+    // 1. Check the agreement checkbox ("次に同意します")
+    const policyCheckbox = page
+      .locator('div[role="checkbox"]')
+      .filter({ hasText: "次に同意します" });
+    const isPolicyChecked = await policyCheckbox.getAttribute("aria-checked");
+    if (isPolicyChecked !== "true") {
+      await policyCheckbox.click();
+      console.log("Policy agreement checkbox checked.");
+    }
+
+    // 2. Click the final Submit button (送信 Submit)
+    console.log("Locating final submit button...");
+    const finalSubmitButton = page
+      .locator('button[data-hook="form-button"]')
+      .filter({ hasText: /送信|Submit/i });
+    await finalSubmitButton.waitFor({ state: "visible" });
+
+    await page.waitForTimeout(500);
+    await finalSubmitButton.click({ force: true });
+    console.log("Final registration submitted successfully!");
+
+    await page.waitForTimeout(3000);
+    await page.screenshot({ path: "submission-result.png", fullPage: true });
+    console.log("Automation executed successfully.");
 
     await page.waitForTimeout(3000);
     await page.screenshot({ path: "submission-result.png", fullPage: true });
