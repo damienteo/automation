@@ -11,176 +11,154 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Fetch Full Article & Generate Line-by-Line Breakdown
-        id: process_news
-        env:
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
-        run: |
-          # 1. Fetch RSS and scrape FULL article text using Python (zero extra dependencies)
-          python3 - << 'PY_EOF' > /tmp/news.json
-          import urllib.request, json, html, sys
-          import xml.etree.ElementTree as ET
-          from html.parser import HTMLParser
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-          class BBCArticleParser(HTMLParser):
-              def __init__(self):
-                  super().__init__()
-                  self.paragraphs = []
-                  self.in_p = False
-                  self.in_article = False
-                  self.curr = []
+      - name: Fetch Article and Generate Digest with Retries
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: |
+            python3 - << 'PY_EOF' > /tmp/news.json
+            import urllib.request, json, html, sys
+            import xml.etree.ElementTree as ET
+            from html.parser import HTMLParser
 
-              def handle_starttag(self, tag, attrs):
-                  d = dict(attrs)
-                  if tag == 'article' or d.get('role') == 'main':
-                      self.in_article = True
-                  if tag == 'p' and self.in_article:
-                      self.in_p = True
-                      self.curr = []
+            class BBCArticleParser(HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self.paragraphs = []
+                    self.in_p = False
+                    self.in_article = False
+                    self.curr = []
 
-              def handle_endtag(self, tag):
-                  if tag == 'p' and self.in_p:
-                      self.in_p = False
-                      t = ''.join(self.curr).strip()
-                      # Filter out non-article boilerplates (video players, captions, ads)
-                      if len(t) > 30 and not any(t.startswith(x) for x in ['Watch:', 'Listen to', 'This video', 'Image source', 'Published']):
-                          self.paragraphs.append(html.unescape(t))
-                  if tag == 'article':
-                      self.in_article = False
+                def handle_starttag(self, tag, attrs):
+                    d = dict(attrs)
+                    if tag == 'article' or d.get('role') == 'main':
+                        self.in_article = True
+                    if tag == 'p' and self.in_article:
+                        self.in_p = True
+                        self.curr = []
 
-              def handle_data(self, data):
-                  if self.in_p:
-                      self.curr.append(data)
+                def handle_endtag(self, tag):
+                    if tag == 'p' and self.in_p:
+                        self.in_p = False
+                        t = ''.join(self.curr).strip()
+                        if len(t) > 30 and not any(t.startswith(x) for x in ['Watch:', 'Listen to', 'This video', 'Image source', 'Published']):
+                            self.paragraphs.append(html.unescape(t))
+                    if tag == 'article':
+                        self.in_article = False
 
-          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) NewsDigestBot/1.0'}
+                def handle_data(self, data):
+                    if self.in_p:
+                        self.curr.append(data)
 
-          # Fetch RSS for top headline link
-          rss_req = urllib.request.Request('https://feeds.bbci.co.uk/news/world/rss.xml', headers=headers)
-          with urllib.request.urlopen(rss_req) as resp:
-              root = ET.fromstring(resp.read())
-          item = root.find('.//channel/item')
-          title = item.find('title').text.strip()
-          link = item.find('link').text.strip()
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) NewsDigestBot/1.0'}
 
-          # Fetch full article HTML and extract paragraphs
-          art_req = urllib.request.Request(link, headers=headers)
-          with urllib.request.urlopen(art_req) as resp2:
-              html_content = resp2.read().decode('utf-8', errors='ignore')
+            rss_req = urllib.request.Request('https://feeds.bbci.co.uk/news/world/rss.xml', headers=headers)
+            with urllib.request.urlopen(rss_req) as resp:
+                root = ET.fromstring(resp.read())
+            item = root.find('.//channel/item')
+            title = item.find('title').text.strip()
+            link = item.find('link').text.strip()
 
-          parser = BBCArticleParser()
-          parser.feed(html_content)
+            art_req = urllib.request.Request(link, headers=headers)
+            with urllib.request.urlopen(art_req) as resp2:
+                html_content = resp2.read().decode('utf-8', errors='ignore')
 
-          # Extracts clean paragraphs from the story
-          selected_paragraphs = parser.paragraphs
-          full_article = '\n\n'.join(selected_paragraphs)
+            parser = BBCArticleParser()
+            parser.feed(html_content)
 
-          with open('/tmp/news.json', 'w') as f:
-              json.dump({
-                  'title': html.unescape(title),
-                  'link': link,
-                  'paragraphs_count': len(parser.paragraphs),
-                  'full_text': full_article
-              }, f)
-          PY_EOF
+            selected_paragraphs = parser.paragraphs
+            full_article = '\n\n'.join(selected_paragraphs)
 
-          TITLE=$(jq -r '.title' /tmp/news.json)
-          ARTICLE_LINK=$(jq -r '.link' /tmp/news.json)
-          ARTICLE_TEXT=$(jq -r '.full_text' /tmp/news.json)
+            with open('/tmp/news.json', 'w') as f:
+                json.dump({
+                    'title': html.unescape(title),
+                    'link': link,
+                    'paragraphs_count': len(parser.paragraphs),
+                    'full_text': full_article
+                }, f)
+            PY_EOF
 
-          TODAY_DATE=$(TZ="Asia/Tokyo" date +'%A, %B %d, %Y')
+            TITLE=$(jq -r '.title' /tmp/news.json)
+            ARTICLE_LINK=$(jq -r '.link' /tmp/news.json)
+            ARTICLE_TEXT=$(jq -r '.full_text' /tmp/news.json)
 
-          # 2. Construct Prompt for Gemini API with the FULL article text
-          PROMPT=$(cat <<EOF
-          Analyze the following complete news article:
-          Title: $TITLE
-          Article Content:
-          $ARTICLE_TEXT
+            TODAY_DATE=$(TZ="Asia/Tokyo" date +'%A, %B %d, %Y')
 
-          Break down the text sentence by sentence for the ENTIRE article from start to finish.
-          For EVERY sentence, provide:
-          1. EN: [Original English sentence]
-          2. ZH: [Mandarin Chinese translation]
-          3. PY: [Hanyu Pinyin with tone marks]
-          4. JA: [Natural Japanese translation]
-          5. RM: [Hepburn Romaji pronunciation]
+            PROMPT=$(cat <<EOF
+            Analyze the following complete news article:
+            Title: $TITLE
+            Article Content:
+            $ARTICLE_TEXT
 
-          Rules:
-          - Translate EVERY sentence across the entire article. Do not stop early or summarize.
-          - Output strictly the line-by-line breakdown without introductory remarks or conversational filler.
-          EOF
-          )
+            Break down the text sentence by sentence for the ENTIRE article from start to finish.
+            For EVERY sentence, provide:
+            1. EN: [Original English sentence]
+            2. ZH: [Mandarin Chinese translation]
+            3. PY: [Hanyu Pinyin with tone marks]
+            4. JA: [Natural Japanese translation]
+            5. RM: [Hepburn Romaji pronunciation]
 
-          # Escape prompt payload safely into JSON with 16,384 tokens and low thinking overhead
-          JSON_PAYLOAD=$(jq -n --arg prompt "$PROMPT" '{
-            contents: [{
-              parts: [{ text: $prompt }]
-            }],
-            generationConfig: {
-              maxOutputTokens: 16384,
-              thinkingConfig: {
-                thinkingLevel: "LOW"
+            Rules:
+            - Translate EVERY sentence across the entire article. Do not stop early or summarize.
+            - Output strictly the line-by-line breakdown without introductory remarks or conversational filler.
+            EOF
+            )
+
+            JSON_PAYLOAD=$(jq -n --arg prompt "$PROMPT" '{
+              contents: [{
+                parts: [{ text: $prompt }]
+              }],
+              generationConfig: {
+                maxOutputTokens: 16384,
+                thinkingConfig: {
+                  thinkingLevel: "LOW"
+                }
               }
-            }
-          }')
+            }')
 
-          # 3. Call Gemini API with automatic retry logic for temporary high demand
-          MAX_RETRIES=3
-          RETRY_DELAY=10
-          RESPONSE=""
-
-          for ((i=1; i<=MAX_RETRIES; i++)); do
             RESPONSE=$(curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
               -H "Content-Type: application/json" \
               -H "x-goog-api-key: ${AI_API_KEY}" \
               -d "$JSON_PAYLOAD")
 
             API_ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty')
-            
-            if [ -z "$API_ERROR" ]; then
-              break
+            if [ -n "$API_ERROR" ]; then
+              echo "::error::Gemini API error: $API_ERROR"
+              exit 1
             fi
 
-            echo "⚠️ Attempt $i failed due to high demand: $API_ERROR"
-            if [ $i -lt $MAX_RETRIES ]; then
-              echo "Retrying in ${RETRY_DELAY} seconds..."
-              sleep $RETRY_DELAY
-              RETRY_DELAY=$((RETRY_DELAY * 2)) # Exponential backoff: 10s, 20s
+            PARSED_CONTENT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
+            if [ -z "$PARSED_CONTENT" ]; then
+              echo "::error::Gemini returned empty or blocked content."
+              exit 1
             fi
-          done
 
-          # Final check after retries
-          if [ -n "$API_ERROR" ]; then
-            echo "::error::Gemini API call failed after $MAX_RETRIES attempts: $API_ERROR"
-            exit 1
-          fi
+            BODY=$(cat <<EOF
+            📰 DAILY NEWS DIGEST ($TODAY_DATE)
+            Original Article: $ARTICLE_LINK
 
-          PARSED_CONTENT=$(echo "$RESPONSE" | jq -r '.candidates[0].content.parts[0].text // empty')
-          if [ -z "$PARSED_CONTENT" ]; then
-            echo "::error::Gemini returned empty or blocked content."
-            exit 1
-          fi
+            ========================================
+            $PARSED_CONTENT
+            ========================================
 
-          # 4. Construct Email Body
-          BODY=$(cat <<EOF
-          📰 DAILY NEWS DIGEST ($TODAY_DATE)
-          Original Article: $ARTICLE_LINK
+            Have a great day!
+            EOF
+            )
 
-          ========================================
-          $PARSED_CONTENT
-          ========================================
-
-          Have a great day!
-          EOF
-          )
-
-          # Export variables with collision-proof delimiter
-          EOF_DELIM=$(openssl rand -hex 8)
-          echo "TODAY_DATE=$TODAY_DATE" >> $GITHUB_ENV
-          {
-            echo "EMAIL_BODY<<$EOF_DELIM"
-            echo "$BODY"
-            echo "$EOF_DELIM"
-          } >> $GITHUB_ENV
+            EOF_DELIM=$(openssl rand -hex 8)
+            echo "TODAY_DATE=$TODAY_DATE" >> $GITHUB_ENV
+            {
+              echo "EMAIL_BODY<<$EOF_DELIM"
+              echo "$BODY"
+              echo "$EOF_DELIM"
+            } >> $GITHUB_ENV
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
 
       - name: Send Email Digest
         uses: dawidd6/action-send-mail@v3
