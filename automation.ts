@@ -1,5 +1,4 @@
 import { chromium } from "playwright";
-
 import { loadEnvFile } from "node:process";
 
 loadEnvFile();
@@ -71,7 +70,7 @@ const runAutomation = async (): Promise<void> => {
       .first()
       .click();
 
-    // フォーム画面の読み込み待機
+    // フォーム画面の読み込み待機 (Wait specifically for #firstName input)
     console.log("Waiting for form inputs to render...");
     await page.waitForSelector("#firstName", {
       state: "visible",
@@ -79,9 +78,16 @@ const runAutomation = async (): Promise<void> => {
     });
     console.log("Successfully reached the registration form.");
 
-    await page.fill("#firstName", process.env.USER_FIRST_NAME || "");
-    await page.fill("#lastName", process.env.USER_LAST_NAME || "");
-    await page.fill("#email", process.env.USER_EMAIL || "");
+    // Fill inputs cleanly using locators ensuring React state picks up the values
+    console.log("Filling form fields...");
+    await page.locator("#firstName").click();
+    await page.locator("#firstName").fill(process.env.USER_FIRST_NAME || "");
+
+    await page.locator("#lastName").click();
+    await page.locator("#lastName").fill(process.env.USER_LAST_NAME || "");
+
+    await page.locator("#email").click();
+    await page.locator("#email").fill(process.env.USER_EMAIL || "");
 
     console.log("Form fields filled successfully.");
 
@@ -109,7 +115,6 @@ const runAutomation = async (): Promise<void> => {
       .locator('div[role="checkbox"]')
       .filter({ hasText: "いいえ no" });
 
-    // Check its current state, click only if it's not already checked
     const isChecked = await noCheckbox.getAttribute("aria-checked");
     if (isChecked !== "true") {
       await noCheckbox.click();
@@ -118,9 +123,7 @@ const runAutomation = async (): Promise<void> => {
       console.log("'No' checkbox is already checked.");
     }
 
-    // Click the Submit button (送信 Submit)
-    console.log("Submitting the form...");
-    // Click the Form button (handles "次へ" / Next or "送信" / Submit)
+    // --- STEP 1: Click Next / Form Button ---
     console.log("Verifying the form button is present...");
     const formButton = page
       .locator('button[data-hook="form-button"]')
@@ -128,25 +131,26 @@ const runAutomation = async (): Promise<void> => {
     await formButton.waitFor({ state: "visible" });
     console.log("Form button successfully found.");
 
-    // Brief stabilization pause and forced click to bypass Wix layout shifts/overlays
     await page.waitForTimeout(500);
     await formButton.click({ force: true });
-    console.log("Form action completed successfully!");
+    console.log("Step 1 form action completed successfully!");
 
     // --- STEP 2: Event Policy Agreement ---
     console.log("Handling event policy agreement step...");
 
-    // 1. Check the agreement checkbox ("次に同意します")
+    // Wait for the policy checkbox to appear on the next screen
     const policyCheckbox = page
       .locator('div[role="checkbox"]')
       .filter({ hasText: "次に同意します" });
+    await policyCheckbox.waitFor({ state: "visible", timeout: 10000 });
+
     const isPolicyChecked = await policyCheckbox.getAttribute("aria-checked");
     if (isPolicyChecked !== "true") {
       await policyCheckbox.click();
       console.log("Policy agreement checkbox checked.");
     }
 
-    // 2. Click the final Submit button (送信 Submit)
+    // Click the final Submit button (送信 Submit)
     console.log("Locating final submit button...");
     const finalSubmitButton = page
       .locator('button[data-hook="form-button"]')
@@ -156,10 +160,6 @@ const runAutomation = async (): Promise<void> => {
     await page.waitForTimeout(500);
     await finalSubmitButton.click({ force: true });
     console.log("Final registration submitted successfully!");
-
-    await page.waitForTimeout(3000);
-    await page.screenshot({ path: "submission-result.png", fullPage: true });
-    console.log("Automation executed successfully.");
 
     await page.waitForTimeout(3000);
     await page.screenshot({ path: "submission-result.png", fullPage: true });
