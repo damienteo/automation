@@ -70,16 +70,32 @@ const runAutomation = async (): Promise<void> => {
       .first()
       .click();
 
-    // Ensure we have transitioned to the form by checking for the section header text
-    console.log("Verifying form header is displayed...");
-    await page
-      .locator("text=/Please fill up the form|必要情報をご入力ください/")
-      .first()
-      .waitFor({
-        state: "visible",
-        timeout: 15000,
-      });
-    console.log("Successfully reached the registration form stage.");
+    // Ensure we have transitioned to the form with a robust retry loop for transient slow loads
+    let formLoaded = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(
+          `Verifying form header is displayed (Attempt ${attempt}/3)...`,
+        );
+        await page
+          .locator("text=/Please fill up the form|必要情報をご入力ください/")
+          .first()
+          .waitFor({
+            state: "visible",
+            timeout: 10000,
+          });
+        formLoaded = true;
+        break;
+      } catch (err) {
+        if (attempt === 3) throw err;
+        console.log("Form not visible yet, waiting briefly and retrying...");
+        await page.waitForTimeout(3000);
+      }
+    }
+
+    if (formLoaded) {
+      console.log("Successfully reached the registration form stage.");
+    }
 
     // フォーム画面の読み込み待機 (Wait specifically for #firstName input)
     console.log("Waiting for form inputs to render...");
