@@ -28,5 +28,10 @@ jobs:
           echo "USER_LAST_NAME=${{ secrets.USER_LAST_NAME }}" >> .env
           echo "USER_EMAIL=${{ secrets.USER_EMAIL }}" >> .env
 
-      - name: Run automation script
-        run: npx tsx automation.ts
+      - name: Run automation script with retries
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: npx tsx automation.ts

@@ -184,12 +184,12 @@ const runAutomation = async (): Promise<void> => {
       .filter({ hasText: /送信|Submit/i });
     await finalSubmitButton.waitFor({ state: "visible" });
 
-    await page.waitForTimeout(500);
-    await finalSubmitButton.click({ force: true });
-    console.log("Final registration submitted successfully!");
+    // await page.waitForTimeout(500);
+    // await finalSubmitButton.click({ force: true });
+    // console.log("Final registration submitted successfully!");
 
-    await page.waitForTimeout(3000);
-    await page.screenshot({ path: "submission-result.png", fullPage: true });
+    // await page.waitForTimeout(3000);
+    // await page.screenshot({ path: "submission-result.png", fullPage: true });
     console.log("Automation executed successfully.");
   } catch (error) {
     console.error("Error during execution:", error);
