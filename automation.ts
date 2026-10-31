@@ -150,9 +150,9 @@ const runAutomation = async (): Promise<void> => {
     console.log("Handling event policy agreement step...");
 
     // Wait for the policy checkbox to appear on the next screen
-    const policyCheckbox = page
-      .locator('div[role="checkbox"]')
-      .filter({ hasText: "次に同意します" });
+    const policyCheckbox = page.locator(
+      'span[role="checkbox"][aria-label*="次に同意します"]',
+    );
     await policyCheckbox.waitFor({ state: "visible", timeout: 10000 });
 
     const isPolicyChecked = await policyCheckbox.getAttribute("aria-checked");
