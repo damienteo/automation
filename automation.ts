@@ -70,6 +70,17 @@ const runAutomation = async (): Promise<void> => {
       .first()
       .click();
 
+    // Ensure we have transitioned to the form by checking for the section header text
+    console.log("Verifying form header is displayed...");
+    await page
+      .locator("text=/Please fill up the form|必要情報をご入力ください/")
+      .first()
+      .waitFor({
+        state: "visible",
+        timeout: 15000,
+      });
+    console.log("Successfully reached the registration form stage.");
+
     // フォーム画面の読み込み待機 (Wait specifically for #firstName input)
     console.log("Waiting for form inputs to render...");
     await page.waitForSelector("#firstName", {
